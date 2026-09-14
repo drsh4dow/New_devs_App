@@ -1,0 +1,60 @@
+x-backend: &backend
+  build: ..
+  environment:
+    DATABASE_URL: postgresql://postgres@db:5432/revenue_test
+    REDIS_URL: redis://redis:6379/0
+    SECRET_KEY: revenue-tests-only
+    PYTHONDONTWRITEBYTECODE: "1"
+  volumes:
+    - ../app:/app/app:ro
+    - .:/app/tests:ro
+    - ../../database:/app/database:ro
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: revenue_test
+    volumes:
+      - ../../database/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d revenue_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/up')",
+        ]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  tests:
+    <<: *backend
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python", "-B", "-m", "unittest", "discover", "-s", "tests", "-v"]

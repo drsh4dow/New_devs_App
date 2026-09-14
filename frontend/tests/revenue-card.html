@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Revenue card regression</title>
+  </head>
+  <body>
+    <main id="root"></main>
+    <script type="module">
+      import React from "react";
+      import { createRoot } from "react-dom/client";
+      import { RevenueSummary } from "../src/components/RevenueSummary";
+      import { supabase } from "../src/lib/supabase";
+
+      // The test server supplies HTTP responses; no real account is used.
+      await supabase.auth.setSession({
+        access_token: "revenue-card-test-session",
+        token_type: "bearer",
+        user: {
+          id: "revenue-card-test-user",
+          email: "sunset@propertyflow.com",
+          tenant_id: "tenant-a",
+        },
+      });
+      const propertyId = new URL(window.location.href).searchParams.get(
+        "property",
+      );
+      createRoot(document.getElementById("root")).render(
+        React.createElement(RevenueSummary, { propertyId }),
+      );
+    </script>
+  </body>
+</html>
