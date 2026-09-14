@@ -1,6 +1,6 @@
 # Revenue regressions
 
-Run from the repository root. Application code is unchanged; the current faults leave these tests failing.
+Run from the repository root.
 
 ## API
 
@@ -17,11 +17,14 @@ The tests call a running FastAPI server over HTTP, with real bearer-token verifi
 Cases:
 
 - Seeded Sunset total on load and refresh: 2,250.00 / 4 bookings.
-- Both client request orders and refreshes: Sunset 2,250.00 / 4; Ocean 0.00 / 0.
+- Both client request orders and refreshes: Sunset 2,250.00 / 4; Ocean 0.00 / 0. Old, unscoped cache entries must not affect these results.
+- Property selection and direct property requests stay within the authenticated client.
+- Database failure returns an error without caching sample revenue.
+- Preserve a single currency; reject mixed currencies rather than add unlike amounts.
 - Paris and New York local month boundaries across March 2024 daylight saving. Request March, February, April, then March without clearing the cache.
 - Three reservations of 0.335: sum first, then half-up rounding gives 1.01, not 1.02.
 
-`month` and `year` are the approved reporting contract. The current endpoint ignores them. Database fallback currently masks the date-filtering and aggregate-rounding checks; their failures do not independently prove those causes.
+The summary endpoint accepts `month` and `year` together. Omitting both selects all time. The dashboard provides the same choice. Month boundaries use the property's timezone, not the browser or database session timezone.
 
 ## Revenue card
 

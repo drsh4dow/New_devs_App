@@ -1,5 +1,6 @@
 """Revenue API regressions. Run with bash backend/tests/run.sh."""
 
+import json
 import os
 import time
 import unittest
@@ -31,7 +32,7 @@ class RevenueTests(unittest.TestCase):
         self.client = httpx.Client(base_url="http://api:8000")
         self.addCleanup(self.client.close)
 
-    def summary(self, client, property_id="prop-001", **period):
+    def get(self, client, path, **params):
         # Same claims as the assignment logins, signed only for the isolated API.
         tenant = {"sunset": "tenant-a", "ocean": "tenant-b"}[client]
         token = jwt.encode(
@@ -45,15 +46,20 @@ class RevenueTests(unittest.TestCase):
             os.environ["SECRET_KEY"],
             algorithm="HS256",
         )
-        response = self.client.get(
-            "/api/v1/dashboard/summary",
-            params={"property_id": property_id, **period},
+        return self.client.get(
+            path,
+            params=params,
             headers={"Authorization": f"Bearer {token}"},
+        )
+
+    def summary(self, client, property_id="prop-001", currency="USD", **period):
+        response = self.get(
+            client, "/api/v1/dashboard/summary", property_id=property_id, **period
         )
         self.assertEqual(response.status_code, 200, response.text)
         data = response.json()
         self.assertEqual(data["property_id"], property_id)
-        self.assertEqual(data["currency"], "USD")
+        self.assertEqual(data["currency"], currency)
         return Decimal(str(data["total_revenue"])), data["reservations_count"]
 
     def replace_reservations(self, rows):
@@ -85,10 +91,80 @@ class RevenueTests(unittest.TestCase):
         for order in [("sunset", "ocean"), ("ocean", "sunset")]:
             with self.subTest(first_client=order[0]):
                 self.cache.flushdb()
+                # A deployment must not reuse unscoped entries from the old code.
+                self.cache.set(
+                    "revenue:prop-001",
+                    json.dumps(
+                        {
+                            "property_id": "prop-001",
+                            "tenant_id": "tenant-a",
+                            "total": "1000.00",
+                            "currency": "USD",
+                            "count": 3,
+                        }
+                    ),
+                )
                 # Repeat both requests: a refresh must not change ownership.
                 clients = order * 2
                 results = [self.summary(client) for client in clients]
                 self.assertEqual(results, [expected[client] for client in clients])
+
+    def test_property_selection_is_scoped_to_the_client(self):
+        for client, expected, other_property in [
+            (
+                "sunset",
+                [
+                    "Beach House Alpha",
+                    "City Apartment Downtown",
+                    "Country Villa Estate",
+                ],
+                "prop-004",
+            ),
+            (
+                "ocean",
+                ["Mountain Lodge Beta", "Lakeside Cottage", "Urban Loft Modern"],
+                "prop-002",
+            ),
+        ]:
+            with self.subTest(client=client):
+                response = self.get(client, "/api/v1/dashboard/properties")
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual([item["name"] for item in response.json()], expected)
+                response = self.get(
+                    client, "/api/v1/dashboard/summary", property_id=other_property
+                )
+                self.assertEqual(response.status_code, 404)
+
+    def test_database_failure_does_not_return_or_cache_sample_revenue(self):
+        with self.db.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE reservations RENAME TO unavailable_reservations"
+            )
+            try:
+                response = self.get(
+                    "sunset", "/api/v1/dashboard/summary", property_id="prop-001"
+                )
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(list(self.cache.scan_iter("revenue:*")), [])
+            finally:
+                cursor.execute(
+                    "ALTER TABLE unavailable_reservations RENAME TO reservations"
+                )
+
+    def test_currency_is_preserved_and_mixed_currencies_are_not_added(self):
+        with self.db.cursor() as cursor:
+            cursor.execute("UPDATE reservations SET currency = 'EUR'")
+            self.assertEqual(
+                self.summary("sunset", currency="EUR"), (Decimal("2250.00"), 4)
+            )
+            cursor.execute(
+                "UPDATE reservations SET currency = 'USD' WHERE id = 'res-tz-1'"
+            )
+        self.cache.flushdb()
+        response = self.get(
+            "sunset", "/api/v1/dashboard/summary", property_id="prop-001"
+        )
+        self.assertEqual(response.status_code, 422)
 
     def test_month_uses_property_timezone_across_daylight_saving(self):
         # One instant before / exactly at local March and April midnight.

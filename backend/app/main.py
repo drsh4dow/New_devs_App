@@ -15,6 +15,7 @@ import os
 import time
 
 from app.core.redis_client import redis_client
+from app.core.database_pool import engine
 from .api.v1 import (
     users_lightning,
     cities,
@@ -122,6 +123,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down...")
+
+    await engine.dispose()
 
     # Shutdown async processor
     await async_processor.shutdown()
